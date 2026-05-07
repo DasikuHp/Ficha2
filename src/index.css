@@ -1,0 +1,16 @@
+/* Reset total para que la Orchatería ocupe toda la pantalla */
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100vh;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  display: block;
+  /* Quitamos el flex que centra y limita */
+}
