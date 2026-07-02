@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+const fs = require('fs');
+const path = require('path');
+
+const code = `import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Clock, LogOut, Users, BarChart2, Shield,
   Coffee, Plus, Trash2, Edit3, Download, X, Check, AlertCircle,
   Menu, Lock, Wifi, WifiOff, Calendar, ClipboardList,
-  Bell, RefreshCw, CheckCircle, Search, Pause, Play, Save, Key, FileJson, CalendarDays
+  Bell, RefreshCw, CheckCircle, Search, Pause, Play, Save, Key
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────
@@ -12,12 +15,12 @@ import {
 const genId = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substr(2, 9));
 const fmtDate = (ts) => new Date(ts).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const fmtDT = (ts) => `${fmtDate(ts)} ${fmtTime(ts)}`;
+const fmtDT = (ts) => \`\${fmtDate(ts)} \${fmtTime(ts)}\`;
 const fmtDuration = (ms) => {
   if (!ms || ms < 0) return "0h 00m";
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
-  return `${h}h ${m.toString().padStart(2, "0")}m`;
+  return \`\${h}h \${m.toString().padStart(2, "0")}m\`;
 };
 async function sha256(str) {
   try {
@@ -41,31 +44,6 @@ const getMonday = (d) => {
   dt.setHours(0, 0, 0, 0);
   return dt;
 };
-
-function getWorkingDaysInMonth(year, month) {
-  let days = 0;
-  const d = new Date(year, month, 1);
-  while (d.getMonth() === month) {
-    const dow = d.getDay();
-    if (dow !== 0 && dow !== 6) days++;
-    d.setDate(d.getDate() + 1);
-  }
-  return days;
-}
-
-function Modal({ children, onClose }) {
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 40, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.4)" }} onClick={onClose} />
-      <div className="card slide-in" style={{ position: "relative", width: "100%", maxWidth: 420, padding: 24, zIndex: 1 }}>
-        <button onClick={onClose} style={{ position: "absolute", top: 14, right: 14, background: "none", border: "none", cursor: "pointer", color: "#c4b09a" }}>
-          <X size={18} />
-        </button>
-        {children}
-      </div>
-    </div>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────
 // SEED DATA
@@ -96,7 +74,7 @@ function getInitialData() {
         ...u,
         pinHash: u.role === "admin" ? SEED_USERS[0].pinHash : SEED_USERS[1].pinHash,
         adminPinHash: u.role === "admin" ? SEED_USERS[0].adminPinHash : undefined,
-        nfcId: `NFC_${u.id}`, horasContrato: 40, turnoEntrada: "08:00", turnoSalida: "16:00"
+        nfcId: \`NFC_\${u.id}\`, horasContrato: 40, turnoEntrada: "08:00", turnoSalida: "16:00"
       }));
       parsed.alerts = [];
       parsed.planning = {};
@@ -132,51 +110,29 @@ export default function App() {
     localStorage.setItem("orxateria_v3", JSON.stringify(data));
   }, [data]);
 
-  const addLog = useCallback(async (action, by, target, prevObj, nextObj, reason = "") => {
-    const entry = { id: genId(), action, by, target, ts: Date.now(), prev: prevObj, next: nextObj, reason, hash: "" };
-    entry.hash = await sha256(JSON.stringify(entry));
-    setData((d) => ({ ...d, logs: [entry, ...(d.logs || [])] }));
-  }, []);
-
   // Alertas automáticas (cada 60s)
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
-      let alertsToLog = [];
       setData(prev => {
-        alertsToLog = []; // clear in case of strict mode re-runs
         let newAlerts = [...(prev.alerts || [])];
         let hasChanges = false;
         
         prev.users.filter(u => u.active && u.role === "employee").forEach(u => {
-          if (!u.turnoEntrada || !u.turnoSalida) return;
-          const [hE, mE] = u.turnoEntrada.split(":").map(Number);
-          const limitTimeIn = new Date(now);
-          limitTimeIn.setHours(hE, mE + 15, 0, 0); // 15 min cortesía
+          if (!u.turnoEntrada) return;
+          const [h, m] = u.turnoEntrada.split(":").map(Number);
+          const limitTime = new Date(now);
+          limitTime.setHours(h, m + 15, 0, 0); // 15 min cortesía
           
-          const [hS, mS] = u.turnoSalida.split(":").map(Number);
-          const limitTimeOut = new Date(now);
-          limitTimeOut.setHours(hS, mS + 15, 0, 0);
-          
-          const recsToday = prev.records.filter(r => r.userId === u.id && isSameDay(r.ts, now.getTime()));
-          const hasIn = recsToday.some(r => r.type === "in");
-          const hasOut = recsToday.some(r => r.type === "out");
-          
-          if (now > limitTimeIn && !hasIn) {
-            const alertId = `alert_${u.id}_${fmtDate(now.getTime())}_NO_ENTRADA`;
-            if (!newAlerts.some(a => a.id === alertId)) {
-              newAlerts.push({ id: alertId, userId: u.id, ts: now.getTime(), type: "NO_ENTRADA", msg: `Falta de fichaje entrada (${u.turnoEntrada})`, severity: "high", dismissed: false });
-              alertsToLog.push({ userId: u.id, type: "NO_ENTRADA" });
-              hasChanges = true;
-            }
-          }
-          
-          if (now > limitTimeOut && hasIn && !hasOut) {
-            const alertId = `alert_${u.id}_${fmtDate(now.getTime())}_NO_SALIDA`;
-            if (!newAlerts.some(a => a.id === alertId)) {
-              newAlerts.push({ id: alertId, userId: u.id, ts: now.getTime(), type: "NO_SALIDA", msg: `Falta de fichaje salida (${u.turnoSalida})`, severity: "high", dismissed: false });
-              alertsToLog.push({ userId: u.id, type: "NO_SALIDA" });
-              hasChanges = true;
+          if (now > limitTime) {
+            // Check si fichó hoy
+            const recsToday = prev.records.filter(r => r.userId === u.id && isSameDay(r.ts, now.getTime()));
+            if (recsToday.length === 0) {
+              const alertId = \`alert_\${u.id}_\${fmtDate(now.getTime())}\`;
+              if (!newAlerts.some(a => a.id === alertId)) {
+                newAlerts.push({ id: alertId, userId: u.id, ts: now.getTime(), type: "NO_SHOW", msg: \`Falta de fichaje entrada (\${u.turnoEntrada})\`, dismissed: false });
+                hasChanges = true;
+              }
             }
           }
         });
@@ -184,12 +140,9 @@ export default function App() {
         if (hasChanges) return { ...prev, alerts: newAlerts };
         return prev;
       });
-      alertsToLog.forEach(al => {
-        addLog("ALERT_GENERATED", "system", al.userId, null, null, al.type);
-      });
     }, 60000);
     return () => clearInterval(interval);
-  }, [addLog]);
+  }, []);
 
   useEffect(() => {
     if (page === "employee" || page === "admin") {
@@ -202,6 +155,12 @@ export default function App() {
   const showToast = useCallback((msg, type = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  const addLog = useCallback(async (action, by, target, prevObj, nextObj, reason = "") => {
+    const entry = { id: genId(), action, by, target, ts: Date.now(), prev: prevObj, next: nextObj, reason, hash: "" };
+    entry.hash = await sha256(JSON.stringify(entry));
+    setData((d) => ({ ...d, logs: [entry, ...(d.logs || [])] }));
   }, []);
 
   const handleLogin = (user) => {
@@ -219,45 +178,10 @@ export default function App() {
     if (!netOk) { showToast("No estás en la red de la orxatería", "error"); return; }
     const record = { id: genId(), userId, type, ts: Date.now(), ip: myIp, hash: "", edited: false, edits: [] };
     record.hash = await sha256(JSON.stringify(record));
-    
-    let newAlert = null;
-    const now = new Date();
-    setData((d) => {
-      const u = d.users.find(x => x.id === userId);
-      if (u) {
-        if (type === "in" && u.turnoEntrada) {
-          const [hE, mE] = u.turnoEntrada.split(":").map(Number);
-          const limitTimeIn = new Date(now);
-          limitTimeIn.setHours(hE, mE + 15, 0, 0);
-          if (now > limitTimeIn) {
-            newAlert = { id: `alert_${u.id}_${fmtDate(now.getTime())}_RETRASO_ENTRADA`, userId, ts: now.getTime(), type: "RETRASO_ENTRADA", msg: `Retraso entrada (hora real: ${fmtTime(now.getTime())}, turno: ${u.turnoEntrada})`, severity: "medium", dismissed: false };
-          }
-        } else if (type === "out" && u.turnoSalida) {
-          const [hS, mS] = u.turnoSalida.split(":").map(Number);
-          const limitTimeOut = new Date(now);
-          limitTimeOut.setHours(hS, mS - 15, 0, 0);
-          if (now < limitTimeOut) {
-            newAlert = { id: `alert_${u.id}_${fmtDate(now.getTime())}_SALIDA_ANTICIPADA`, userId, ts: now.getTime(), type: "SALIDA_ANTICIPADA", msg: `Salida anticipada (hora real: ${fmtTime(now.getTime())}, turno: ${u.turnoSalida})`, severity: "medium", dismissed: false };
-          }
-        }
-      }
-
-      let alerts = d.alerts || [];
-      if (newAlert && !alerts.some(a => a.id === newAlert.id)) {
-        alerts = [...alerts, newAlert];
-      } else {
-        newAlert = null;
-      }
-      
-      return { ...d, records: [...d.records, record], alerts };
-    });
-
+    setData((d) => ({ ...d, records: [...d.records, record] }));
     await addLog(type, userId, userId, null, record, "");
-    if (newAlert) {
-      await addLog("ALERT_GENERATED", "system", userId, null, null, newAlert.type);
-    }
     const msgs = { in: "Entrada registrada", out: "Salida registrada", pause_start: "Pausa iniciada", pause_end: "Pausa finalizada" };
-    showToast(`✅ ${msgs[type]}`);
+    showToast(\`✅ \${msgs[type]}\`);
   }, [netOk, myIp, addLog, showToast]);
 
   const acceptRGPD = () => {
@@ -277,7 +201,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", minHeight: "100vh", background: "#faf7f2", display: "flex", flexDirection: "column" }}>
-      <style>{`
+      <style>{\`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,700&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'DM Sans', system-ui, sans-serif; }
@@ -293,7 +217,7 @@ export default function App() {
         .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; }
         .slide-in { animation: slideIn .2s ease; }
         @keyframes slideIn { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform: translateY(0); } }
-      `}</style>
+      \`}</style>
 
       {toast && (
         <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 9999, padding: "12px 20px", borderRadius: 12, background: toast.type === "error" ? "#c0392b" : "#1a7a4a", color: "#fff", fontWeight: 600, fontSize: 14, boxShadow: "0 8px 24px rgba(0,0,0,.2)" }}>
@@ -316,14 +240,14 @@ export default function App() {
         </div>
       )}
 
-      {page === "login" && <LoginScreen users={data.users} onLogin={handleLogin} showToast={showToast} />}
+      {page === "login" && <LoginScreen users={data.users} onLogin={handleLogin} />}
       {page === "employee" && <EmployeeView me={me} data={data} netOk={netOk} myIp={myIp} onClockInOut={clockInOut} onLogout={handleLogout} clock={clock} />}
       {page === "admin" && (
         <AdminView
           me={me} data={data} setData={setData} netOk={netOk} myIp={myIp} addLog={addLog}
           onClockInOut={clockInOut} onLogout={handleLogout}
           tab={adminTab} setTab={(t) => {
-            if (t === "employees" || t === "audit" || t === "planning") setAuthSecondary({ active: true, targetTab: t });
+            if (t === "employees" || t === "audit") setAuthSecondary({ active: true, targetTab: t });
             else setAdminTab(t);
           }}
           sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} showToast={showToast} clock={clock}
@@ -337,11 +261,9 @@ export default function App() {
         </Modal>
       )}
 
-      {page !== "rgpd" && (
-        <footer style={{ padding: "16px", textAlign: "center", fontSize: 11, color: "#a89b88", background: "#efe8dd", marginTop: "auto" }}>
-          <strong>Protocolo de Incidencias:</strong> Si experimentas fallos en el registro, contacta inmediatamente con gerencia. Sistema de auditoría inmutable v3.0 (Cumplimiento RD-L 8/2019).
-        </footer>
-      )}
+      <footer style={{ padding: "16px", textAlign: "center", fontSize: 11, color: "#a89b88", background: "#efe8dd", marginTop: "auto" }}>
+        <strong>Protocolo de Incidencias:</strong> Si experimentas fallos en el registro, contacta inmediatamente con gerencia. Sistema de auditoría inmutable v3.0 (Cumplimiento RD-L 8/2019).
+      </footer>
     </div>
   );
 }
@@ -358,12 +280,10 @@ function SecondaryPinAuth({ onVerify, onCancel }) {
     if (pin.length === 4) onVerify(pin);
   }, [pin]);
 
-  const isDemo = localStorage.getItem("orxateria_demo_mode") === "true";
-
   return (
     <div style={{ textAlign: "center" }}>
       <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: "#1a0a00" }}>Área Protegida</h3>
-      <p style={{ fontSize: 13, color: "#7a6a50", marginBottom: 20 }}>Introduce tu PIN de administrador</p>
+      <p style={{ fontSize: 13, color: "#7a6a50", marginBottom: 20 }}>Introduce tu PIN de Administrador (0000)</p>
       
       <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 24 }}>
         {[0,1,2,3].map(i => (
@@ -379,7 +299,6 @@ function SecondaryPinAuth({ onVerify, onCancel }) {
         <button onClick={() => handlePad(0)} style={{ padding: 16, fontSize: 24, borderRadius: 12, border: "1px solid #e0d5c5", background: "#fff", cursor: "pointer" }}>0</button>
         <button onClick={handleDelete} style={{ padding: 16, fontSize: 20, borderRadius: 12, border: "none", background: "#fef2f2", color: "#b91c1c", cursor: "pointer" }}>⌫</button>
       </div>
-      {isDemo && <p style={{ fontSize: 10, color: "#a89b88", marginTop: 16 }}>Demo: consulta el README</p>}
     </div>
   );
 }
@@ -387,19 +306,17 @@ function SecondaryPinAuth({ onVerify, onCancel }) {
 // ─────────────────────────────────────────────────────────────
 // LOGIN SCREEN (PIN + NFC)
 // ─────────────────────────────────────────────────────────────
-function LoginScreen({ users, onLogin, showToast }) {
+function LoginScreen({ users, onLogin }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [nfcModal, setNfcModal] = useState(false);
-  const [pendingUser, setPendingUser] = useState(null);
 
   const checkPin = async (finalPin) => {
     const h = await sha256(finalPin);
     const user = users.find(u => u.pinHash === h && u.active);
     if (user) {
       setError("");
-      setPendingUser(user);
-      setNfcModal(true);
+      onLogin(user);
     } else {
       setError("PIN incorrecto");
       setPin("");
@@ -414,13 +331,10 @@ function LoginScreen({ users, onLogin, showToast }) {
 
   const simNFC = () => {
     setTimeout(() => {
+      const u = users.find(x => x.nfcId === "NFC_EMP1"); // Carlos por defecto
       setNfcModal(false);
-      if (pendingUser) {
-        onLogin(pendingUser);
-        setPendingUser(null);
-        setPin("");
-      }
-    }, 500);
+      onLogin(u);
+    }, 1500);
   };
 
   return (
@@ -450,7 +364,7 @@ function LoginScreen({ users, onLogin, showToast }) {
           </div>
 
           <div style={{ marginTop: 24 }}>
-            <button onClick={() => showToast("Primero introduce tu PIN", "error")} style={{ width: "100%", padding: 14, borderRadius: 12, background: "#1a0a00", color: "#fff", border: "none", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer" }}>
+            <button onClick={() => { setNfcModal(true); simNFC(); }} style={{ width: "100%", padding: 14, borderRadius: 12, background: "#1a0a00", color: "#fff", border: "none", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer" }}>
               <Wifi size={18} /> Fichar con NFC
             </button>
           </div>
@@ -459,14 +373,13 @@ function LoginScreen({ users, onLogin, showToast }) {
       </div>
 
       {nfcModal && (
-        <Modal onClose={() => { setNfcModal(false); setPendingUser(null); setPin(""); }}>
+        <Modal onClose={() => setNfcModal(false)}>
           <div style={{ textAlign: "center", padding: 20 }}>
             <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#fef3e2", margin: "0 auto 16px", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Wifi size={32} color="#c17d2e" className="pulse" />
             </div>
             <h3 style={{ fontSize: 18, fontWeight: 700 }}>Aproxima tu pulsera o tarjeta NFC</h3>
             <p style={{ fontSize: 13, color: "#7a6a50", marginTop: 8 }}>Lectura simulada en proceso...</p>
-            <button onClick={simNFC} className="btn-primary" style={{ marginTop: 16, padding: "10px 20px", borderRadius: 8 }}>Simular NFC ✓</button>
           </div>
         </Modal>
       )}
@@ -587,57 +500,21 @@ function EmployeeView({ me, data, netOk, myIp, onClockInOut, onLogout, clock }) 
           </div>
         )}
         
-        {tab === "history" && (() => {
-          const now = new Date();
-          const workDays = getWorkingDaysInMonth(now.getFullYear(), now.getMonth());
-          const horasDiarias = me.horasContrato / 5;
-          const contratoMes = workDays * horasDiarias; // en horas
-
-          // Para calcular horas efectivas del mes
-          const recsThisMonth = myRecs.filter(r => new Date(r.ts).getMonth() === now.getMonth() && new Date(r.ts).getFullYear() === now.getFullYear());
-          
-          // Agrupar por día
-          const recsByDay = {};
-          recsThisMonth.forEach(r => {
-            const dayKey = fmtDate(r.ts);
-            if (!recsByDay[dayKey]) recsByDay[dayKey] = [];
-            recsByDay[dayKey].push(r);
-          });
-          
-          let horasEfectivasMs = 0;
-          Object.values(recsByDay).forEach(recs => {
-            const st = calcDayStats(recs);
-            horasEfectivasMs += st.totalW;
-          });
-          
-          const contratoMesMs = contratoMes * 3600000;
-          const diffMs = horasEfectivasMs - contratoMesMs;
-          const diffAbs = Math.abs(diffMs);
-          const diffSign = diffMs >= 0 ? "+" : "-";
-          const diffColor = diffMs >= 0 ? "#16a34a" : "#dc2626";
-
-          return (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div className="card" style={{ padding: 16 }}>
-                <p style={{ fontSize: 13, color: "#7a6a50" }}>Contrato este mes: <strong>{contratoMes}h</strong> ({workDays} días lab.)</p>
-                <p style={{ fontSize: 13, color: "#7a6a50", marginTop: 4 }}>Horas efectivas: <strong>{fmtDuration(horasEfectivasMs)}</strong></p>
-                <p style={{ fontSize: 14, fontWeight: 700, color: diffColor, marginTop: 8 }}>
-                  Balance: {diffSign} {fmtDuration(diffAbs)}
-                </p>
-              </div>
-              {/* Simple history list */}
-              {myRecs.slice(0, 50).reverse().map(r => (
-                 <div key={r.id} className="card" style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                   <div>
-                     <p style={{ fontSize: 14, fontWeight: 600 }}>{fmtDate(r.ts)}</p>
-                     <p style={{ fontSize: 12, color: "#9c7a50" }}>{r.type.replace("_", " ")}</p>
-                   </div>
-                   <span style={{ fontFamily: "monospace", fontSize: 16 }}>{fmtTime(r.ts)}</span>
+        {tab === "history" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <p style={{ fontSize: 13, color: "#7a6a50" }}>Horas contrato: <strong>{me.horasContrato}h/sem</strong>. Balance mensual base: {me.horasContrato * 4}h.</p>
+            {/* Simple history list */}
+            {myRecs.slice(0, 50).map(r => (
+               <div key={r.id} className="card" style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                 <div>
+                   <p style={{ fontSize: 14, fontWeight: 600 }}>{fmtDate(r.ts)}</p>
+                   <p style={{ fontSize: 12, color: "#9c7a50" }}>{r.type}</p>
                  </div>
-              ))}
-            </div>
-          );
-        })()}
+                 <span style={{ fontFamily: "monospace", fontSize: 16 }}>{fmtTime(r.ts)}</span>
+               </div>
+            ))}
+          </div>
+        )}
 
         {tab === "calendar" && <CalendarTab records={myRecs} user={me} />}
       </div>
@@ -653,9 +530,6 @@ function CalendarTab({ records, user }) {
 
   const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
   const days = Array.from({length: daysInMonth}, (_, i) => new Date(currentMonth.getFullYear(), currentMonth.getMonth(), i + 1));
-  
-  const firstDayOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
-  const blanks = firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1;
 
   const isWithin15Min = (date, timeStr) => {
     if (!timeStr) return false;
@@ -700,7 +574,6 @@ function CalendarTab({ records, user }) {
         {["L","M","X","J","V","S","D"].map(d => <div key={d}>{d}</div>)}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
-        {Array.from({length: blanks}).map((_, i) => <div key={`b-${i}`} />)}
         {days.map(d => (
           <div key={d.getDate()} style={{ aspectRatio: "1", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, background: colors[getStatus(d)], color: getStatus(d) === "grey" ? "#9ca3af" : "#fff", fontWeight: 700, fontSize: 14 }}>
             {d.getDate()}
@@ -723,7 +596,6 @@ function AdminView({ me, data, setData, netOk, myIp, addLog, onClockInOut, onLog
   const tabs = [
     { id: "dashboard", icon: <BarChart2 size={18} />, label: "Panel" },
     { id: "clock", icon: <Clock size={18} />, label: "Mi fichaje" },
-    { id: "calendar", icon: <CalendarDays size={18} />, label: "Calendario" },
     { id: "planning", icon: <CalendarDays size={18} />, label: "Planning" },
     { id: "employees", icon: <Users size={18} />, label: "Empleados" },
     { id: "records", icon: <ClipboardList size={18} />, label: "Registros" },
@@ -736,7 +608,7 @@ function AdminView({ me, data, setData, netOk, myIp, addLog, onClockInOut, onLog
   return (
     <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
       <aside style={{ width: 240, background: "linear-gradient(180deg,#7c3a0e,#5c2b0e)", padding: "24px 16px", display: "flex", flexDirection: "column" }} className="desktop-sidebar">
-        <style>{`.desktop-sidebar{display:flex !important;} @media(max-width:768px){.desktop-sidebar{display:none !important;}}`}</style>
+        <style>{\`.desktop-sidebar{display:flex !important;} @media(max-width:768px){.desktop-sidebar{display:none !important;}}\`}</style>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 32, color: "#fff" }}>
           <Coffee size={24} color="#fde68a" />
           <div><p style={{ fontWeight: 700 }}>Orxatería</p><p style={{ fontSize: 11, color: "#f5c97a" }}>Admin</p></div>
@@ -754,14 +626,13 @@ function AdminView({ me, data, setData, netOk, myIp, addLog, onClockInOut, onLog
 
       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
         <div style={{ background: "#fff", borderBottom: "1px solid #ede5d8", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }} className="mobile-topbar">
-          <style>{`.mobile-topbar{display:flex !important;} @media(min-width:769px){.mobile-topbar{display:none !important;}}`}</style>
+          <style>{\`.mobile-topbar{display:flex !important;} @media(min-width:769px){.mobile-topbar{display:none !important;}}\`}</style>
           <button onClick={() => setSidebarOpen(true)} style={{ background: "none", border: "none", cursor: "pointer" }}><Menu size={24} color="#7c3a0e" /></button>
         </div>
 
         <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto", width: "100%" }}>
           {tab === "dashboard" && <AdminDashboard data={data} />}
           {tab === "clock" && <EmployeeView me={me} data={data} netOk={netOk} myIp={myIp} onClockInOut={onClockInOut} onLogout={onLogout} clock={clock} />}
-          {tab === "calendar" && <AdminCalendarView data={data} />}
           {tab === "planning" && <PlanningPanel data={data} setData={setData} addLog={addLog} showToast={showToast} me={me} />}
           {tab === "employees" && <EmployeesPanel data={data} setData={setData} addLog={addLog} showToast={showToast} me={me} />}
           {tab === "records" && <RecordsPanel data={data} setData={setData} addLog={addLog} showToast={showToast} me={me} />}
@@ -810,7 +681,7 @@ function PlanningPanel({ data, setData, addLog, showToast, me }) {
     return d;
   });
 
-  const weekKey = `week_${fmtDate(monday.getTime())}`;
+  const weekKey = \`week_\${fmtDate(monday.getTime())}\`;
   const plan = data.planning[weekKey] || {};
 
   const handleUpdate = (userId, dayIdx, val) => {
@@ -910,7 +781,7 @@ function RecordsPanel({ data }) {
     const blob = new Blob([JSON.stringify(data.records, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `registros_orxateria_${fmtDate(Date.now()).replace(/\//g,"-")}.json`;
+    a.href = url; a.download = \`registros_orxateria_\${fmtDate(Date.now()).replace(/\\//g,"-")}.json\`;
     a.click();
   };
 
@@ -937,7 +808,7 @@ function RecordsPanel({ data }) {
               <tr key={r.id}>
                 <td style={{ padding: 12, borderBottom: "1px solid #f5ede0", fontFamily: "monospace" }}>{fmtDT(r.ts)}</td>
                 <td style={{ padding: 12, borderBottom: "1px solid #f5ede0" }}>{data.users.find(u=>u.id===r.userId)?.name}</td>
-                <td style={{ padding: 12, borderBottom: "1px solid #f5ede0", fontWeight: 700, color: r.type === "in" || r.type === "pause_end" ? "#16a34a" : r.type === "pause_start" ? "#d97706" : "#dc2626" }}>{r.type.toUpperCase().replace("_", " ")}</td>
+                <td style={{ padding: 12, borderBottom: "1px solid #f5ede0", fontWeight: 700, color: r.type === "in" ? "#16a34a" : "#dc2626" }}>{r.type.toUpperCase()}</td>
                 <td style={{ padding: 12, borderBottom: "1px solid #f5ede0", fontFamily: "monospace", fontSize: 11, color: "#9ca3af" }}>{r.hash.substring(0,24)}...</td>
               </tr>
             ))}
@@ -963,14 +834,11 @@ function AlertsPanel({ data, setData }) {
       <h1 style={{ fontSize: 24, fontWeight: 700, color: "#1a0a00", marginBottom: 24 }}>Alertas Automáticas</h1>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {alerts.filter(a => !a.dismissed).map(a => (
-          <div key={a.id} className="card" style={{ padding: 16, borderLeft: a.severity === "medium" ? "4px solid #eab308" : "4px solid #ef4444", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <div style={{ fontSize: 20 }}>{a.severity === "medium" ? "⚠️" : "❌"}</div>
-              <div>
-                <p style={{ fontWeight: 700, color: "#1a0a00" }}>{data.users.find(u=>u.id===a.userId)?.name}</p>
-                <p style={{ fontSize: 13, color: a.severity === "medium" ? "#ca8a04" : "#ef4444", marginTop: 4 }}>{a.msg}</p>
-                <p style={{ fontSize: 11, color: "#9c7a50", marginTop: 4 }}>Generada: {fmtDT(a.ts)}</p>
-              </div>
+          <div key={a.id} className="card" style={{ padding: 16, borderLeft: "4px solid #ef4444", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <p style={{ fontWeight: 700, color: "#1a0a00" }}>{data.users.find(u=>u.id===a.userId)?.name}</p>
+              <p style={{ fontSize: 13, color: "#ef4444", marginTop: 4 }}>{a.msg}</p>
+              <p style={{ fontSize: 11, color: "#9c7a50", marginTop: 4 }}>Generada: {fmtDT(a.ts)}</p>
             </div>
             <button className="btn-ghost" onClick={() => dismiss(a.id)} style={{ padding: "8px 12px", borderRadius: 8 }}>Marcar leída</button>
           </div>
@@ -1000,7 +868,7 @@ function AuditPanel({ data, setData, me }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, color: "#1a0a00" }}>Auditoría (Área Protegida)</h1>
         <button className="btn-ghost" onClick={purgeOld} style={{ padding: "8px 16px", borderRadius: 10, color: "#dc2626", borderColor: "#dc2626" }}>
-          <Trash2 size={16} style={{ display: "inline", verticalAlign: "middle" }}/> Purgar &gt; 4 años
+          <Trash2 size={16} style={{ display: "inline", verticalAlign: "middle" }}/> Purgar > 4 años
         </button>
       </div>
       <div className="card" style={{ padding: 16 }}>
@@ -1028,37 +896,7 @@ function AuditPanel({ data, setData, me }) {
     </div>
   );
 }
+\`;
 
-function AdminCalendarView({ data }) {
-  const employees = data.users.filter(u => u.active && u.role === "employee");
-  const [selectedUserId, setSelectedUserId] = useState(employees[0]?.id || "");
-
-  const selectedUser = data.users.find(u => u.id === selectedUserId);
-  const userRecords = data.records.filter(r => r.userId === selectedUserId);
-
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, color: "#1a0a00" }}>Calendario Empleados</h1>
-        <select 
-          value={selectedUserId} 
-          onChange={e => setSelectedUserId(e.target.value)}
-          style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #e0d5c5", fontSize: 14 }}
-        >
-          {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-        </select>
-      </div>
-      {selectedUser && (
-        <div style={{ marginBottom: 16 }}>
-          <p style={{ fontSize: 16, fontWeight: 700 }}>{selectedUser.name}</p>
-          <p style={{ fontSize: 13, color: "#7a6a50" }}>Turno: {selectedUser.turnoEntrada} - {selectedUser.turnoSalida}</p>
-        </div>
-      )}
-      {selectedUser ? (
-        <CalendarTab records={userRecords} user={selectedUser} />
-      ) : (
-        <p>No hay empleados.</p>
-      )}
-    </div>
-  );
-}
+fs.writeFileSync(path.join(__dirname, 'src', 'App.jsx'), code);
+console.log('App.jsx successfully overwritten.');
